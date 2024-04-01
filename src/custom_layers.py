@@ -4,6 +4,7 @@ from transformers.models.mixtral.configuration_mixtral import MixtralConfig
 from transformers.activations import ACT2FN
 from typing import Dict, Any
 from hqq.core.quantize import HQQLinear, Quantizer
+import time
 
 import torch
 from torch import nn
@@ -11,6 +12,8 @@ from torch.nn import functional as F
 
 from .packing import pack_4bit_u8_common, pack_2bit_u8_common, unpack_4bit_u8_common, unpack_2bit_u8_common
 from .triton_kernels import triton_matmul4_transpose, triton_matmul3_transpose, triton_matmul2_transpose
+
+from src.gtime import total_time
 
 
 class HQQLinearTritonSavable(HQQLinear):
@@ -135,6 +138,7 @@ class HQQLinearTritonSavable(HQQLinear):
         
     @staticmethod
     def _add_to_state_dict_hook(self, state_dict, prefix, local_metadata):
+        print(self.W_q)
         tensor_paths = self._get_tensor_paths(self.meta)
         assert set(tensor_paths).issubset(
             {'scale_q', 'meta_scale.scale', 'meta_scale.zero', 'zero_q', 'meta_zero.scale', 'meta_zero.zero',
@@ -272,10 +276,15 @@ class SparseMoeWrapper(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
+        
+        #print(hidden_states)
         # router_logits: (batch * sequence_length, n_experts)
         router_logits = self.gate(hidden_states)
 
+        #print(router_logits)
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
+        #print(routing_weights)
+        #print(self.top_k)
         routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         # we cast back to the input dtype
@@ -292,6 +301,7 @@ class SparseMoeWrapper(nn.Module):
         active_experts = selected_experts.flatten().unique().tolist()
 
         # Loop over all available experts in the model and perform the computation on each expert
+        # st = time.time()
         for (_layer_index, expert_idx), expert_layer in self.experts.load_experts(
                 *((self.layer_id, expert_idx) for expert_idx in active_experts), unordered=True):
             idx, top_x = torch.where(expert_mask[expert_idx])
@@ -310,5 +320,17 @@ class SparseMoeWrapper(nn.Module):
             # However `index_add_` only support torch tensors for indexing so we'll use
             # the `top_x` tensor here.
             final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+        # et = time.time()
+        #layertime = et - st
+        #global total_time
+        #total_time += layertime
+
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
         return final_hidden_states, router_logits
+
+def print_time():
+    print("total expert time:", total_time)
+
+def clean_time():
+    global total_time
+    total_time = 0
