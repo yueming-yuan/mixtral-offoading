@@ -217,7 +217,6 @@ class ExpertCache_nq:
         self.main_infos: List[Optional[ExpertInfo]] = [None for _ in range(main_size)]
 
         assert self.module_size is not None
-        print(self.device)
         self.offloaded_storages = [
             torch.UntypedStorage(self.module_size).pin_memory(self.device) for _ in range(offload_size)]
         self.offloaded_infos: List[Optional[ExpertInfo]] = [None for _ in range(offload_size)]

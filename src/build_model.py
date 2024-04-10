@@ -199,8 +199,6 @@ def load_00_expert_state_dict(states_dir: str, device: torch.device):
     return load_file(os.path.join(states_dir, state_fpath), device=str(device))
 
 
-
-
 def build_model(
     device: torch.device,
     quant_config: QuantConfig,
@@ -299,6 +297,16 @@ def make_and_load_expert_wrapper_nq(
         module_idx = f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}"
         weight_map = json.load(f)["weight_map"]
         state_fpath = weight_map[f"{module_idx}.w1.weight"]
+    loaded_state_dict = load_file(os.path.join(states_dir, state_fpath), device=str(device))
+    expert = MixtralBLockSparseTop2MLP(config).half()
+    expert.load_state_dict(loaded_state_dict, strict=True)
+
+    """
+    index_path = os.path.join(states_dir, "model.safetensors.index.json")
+    with open(index_path) as f:
+        module_idx = f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}"
+        weight_map = json.load(f)["weight_map"]
+        state_fpath = weight_map[f"{module_idx}.w1.weight"]
         state_fpath2 = weight_map[f"{module_idx}.w3.weight"]
     
     loaded_state_dict = load_file(os.path.join(states_dir, state_fpath), device=str(device))
@@ -321,6 +329,7 @@ def make_and_load_expert_wrapper_nq(
     #print(expert.state_dict)
     #print(state_dict)
     expert.load_state_dict(state_dict, strict=True)
+    """
 
     return MixtralExpertWrapper_nq(expert, device)
 
@@ -332,12 +341,14 @@ def build_model_without_quant(
 ):
     model_name = "mistralai/Mixtral-8x7B-Instruct-v0.1"
 
+    state_dict_00 = load_00_expert_state_dict_nq(state_path, device)
+    """
     state_dict_00 = {}
-    loaded_state_dict_00 = load_00_expert_state_dict_nq(state_path, device)
     key_mapping = {'model.layers.0.block_sparse_moe.experts.0.w1.weight': 'w1.weight', 'model.layers.0.block_sparse_moe.experts.0.w2.weight': 'w2.weight', 'model.layers.0.block_sparse_moe.experts.0.w3.weight': 'w3.weight'}
     for i, j in key_mapping.items():
         state_dict_00[j] = loaded_state_dict_00[i]
     del loaded_state_dict_00
+    """
 
     def _make_module():
         config = AutoConfig.from_pretrained(model_name, torch_dtype=torch.float16)
@@ -362,6 +373,7 @@ def build_model_without_quant(
     with open(state_index_path) as f:
         weight_map = json.load(f)["weight_map"]
 
+    '''
     state_dict = {}
     exclusion_pattern = re.compile(r"model\.layers\.\d+\.block_sparse_moe\.experts\.\d+\.(w1|w2|w3)\.weight")
     unique_filenames = set(weight_map.values())
@@ -379,8 +391,8 @@ def build_model_without_quant(
         print(f"Peak GPU Memory Usage: {peak_memory_usage} GB")  
     print(state_dict.keys())
     model.load_state_dict(state_dict, strict=True)
+    '''
 
-    """
     trunk_state_path = os.path.join(
         state_path,
         weight_map["model.embed_tokens.weight"],
@@ -388,8 +400,9 @@ def build_model_without_quant(
     print(trunk_state_path)
     print(load_file(trunk_state_path, device=str(device)))
     model.load_state_dict(load_file(trunk_state_path, device=str(device)), strict=True)
-    """
 
+    print(f"Peak GPU Memory Usage: {peak_memory_usage} GB")  
+    print("Created expert cache! ... Cleaning cache")
     print("Finish loading trunk states!")
 
     expert_cache = ExpertCache_nq(
